@@ -41,8 +41,8 @@ We construct a csr (compressed sparse row) with
     data - values for indices
 """
 
-def toric_code_symplectic(L):
-    I = eye_array(m=2*L*L, dtype=np.int8, format='csr')
+def symplectic(nq):
+    I = eye_array(m=nq, dtype=np.int8, format='csr')
     return block_array([[None, I], [I, None]], format='csr', dtype=np.int8)
 
 def toric_code_x(L, verbose=False):
@@ -128,7 +128,7 @@ def toric_code(L, verbose=False):
     H_X = toric_code_x(L, verbose=verbose)
     H_Z = toric_code_z(L, verbose=verbose)
     H = block_array([[H_X, None], [None, H_Z]], format='csr', dtype=np.int8)
-    assert np.allclose((H @ toric_code_symplectic(L) @ H.T).data % 2, 0)
+    assert np.allclose((H @ symplectic(2*L**2) @ H.T).data % 2, 0)
     return H
 
 def toric_code_logical_z(L, verbose=False):
@@ -197,10 +197,12 @@ def toric_code_logical(L, verbose=False):
     Log = block_array([[L_X, None], [None, L_Z]], format='csr', dtype=np.int8)
 
     k = 2
-    assert np.all((Log @ toric_code_symplectic(2) @ Log.T).indptr == np.arange(2*k + 1))
-    assert np.all((Log @ toric_code_symplectic(2) @ Log.T).indices == np.arange(2*k)[::-1])
+    ip = Log @ symplectic(2*2**2) @ Log.T
+    assert (ip[k:2*k,0:k] != ip[0:k,k:2*k].T).nnz == 0 
+    assert np.all(ip.indptr == np.arange(2*k + 1))
+    assert np.all(ip.indices == np.arange(2*k)[::-1])
     
-    return Log
+    return Log, ip
 
 """
 Surface code of distance d with k logical qubits:
@@ -312,13 +314,7 @@ Surface code of distance d with k logical qubits:
 Note that if k > 1, we will have rough boundary conditions somewhere at the top and bottom of the grid. Thus
 """
 
-def surface_code_x(L, k, verbose=False):
-    """
-    Parity check for (unrotated) surface code with k logical qubits; only X stabilizers
-
-    """
-    assert L > 3
-    
+def surface_code_properties(L, k, verbose=False):
     if k == 1:
         Lx = L-1
     elif k % 2 == 1:
@@ -350,9 +346,11 @@ def surface_code_x(L, k, verbose=False):
 
     boundary_x = np.zeros(2, dtype=bool)
     boundary_x[:] = [False, (k % 2) == 0]
-    
-    print(Lx, Ly)
-    print(boundary_x, boundary_y)
+
+    if verbose:
+        print(f"Lx={Lx}, Ly={Ly}")
+        print(f"boundary_x={boundary_x}")
+        print(f"boundary_y={boundary_y}")
 
     num_qubits = 0
     seen_qubits = []
@@ -368,20 +366,30 @@ def surface_code_x(L, k, verbose=False):
         seen_qubits[-1] += Ly
         #num_qubits += Ly
     num_qubits = np.sum(seen_qubits)
-    print(num_qubits)
+    if verbose:
+        print(f"num_qubits={num_qubits}")
 
+    return Lx, Ly, boundary_x, boundary_y, seen_qubits, num_qubits
+
+def surface_code_x(L, k, verbose=False):
+    """
+    Parity check for (unrotated) surface code with k logical qubits; only X stabilizers
+    """
+    assert L > 3
+
+    Lx, Ly, boundary_x, boundary_y, seen_qubits, num_qubits = surface_code_properties(L, k, verbose)
+    
     indices = []
     indptr = [0]
-
+    num_stabilizers = 0
+    
     if verbose:
         print('Generate X stabilizers')
         
     for i in range(Lx):
         qind_i = int(np.sum(seen_qubits[:i]))
-        print(qind_i, seen_qubits)
         for j in range(Ly):
             qind_ij = qind_i + 2*j + (1 if not boundary_y[i] else 0)
-            print(qind_ij)
 
             if i == Lx-1:
                 # Last column; treatment depnds on if right boundary is smooth or rough
@@ -424,9 +432,270 @@ def surface_code_x(L, k, verbose=False):
             
             if verbose:
                 print(l_ind)
-    
+
+            num_stabilizers += 1
             indices.extend(l_ind)
             indptr.append(indptr[-1]+l_wt)
-    
+
+    assert num_stabilizers == Lx*Ly
     data = np.ones(len(indices), dtype=np.int8)
     return csr_matrix((data, indices, indptr), shape=(Lx*Ly, num_qubits), dtype=np.int8)
+
+def surface_code_z(L, k, verbose=False):
+    """
+    Parity check for (unrotated) surface code with k logical qubits; only Z stabilizers
+    """
+    assert L > 3
+
+    Lx, Ly, boundary_x, boundary_y, seen_qubits, num_qubits = surface_code_properties(L, k, verbose)
+    
+    indices = []
+    indptr = [0]
+    num_stabilizers = 0
+    
+    if verbose:
+        print('Generate Z stabilizers')
+        
+    for i in range(Lx):
+        qind_i = int(np.sum(seen_qubits[:i]))
+        for j in range(Ly - 1):
+            qind_ij = qind_i + 2*j + (1 if not boundary_y[i] else 0)
+
+            if i == 0:
+                # First column; rough left, smooth top and bottom
+                assert not boundary_x[0]
+                assert boundary_y[i]
+                l_ind = [qind_ij, qind_ij+1, qind_ij+2]
+                l_wt = 3
+            elif not boundary_y[i-1] and not boundary_y[i]:
+                # Both rough; partial Z stabilizer above and below
+                qind_i2 = int(np.sum(seen_qubits[:i-1]))
+                qind_ij2 = qind_i2 + 2*j + (1 if not boundary_y[i-1] else 0)
+
+                if j == 0:
+                    # Partial stabilizer below
+                    # left, up, right
+                    l_ind = [qind_ij2-1, qind_ij, qind_ij-1]
+                    l_wt = 3
+                    if verbose:
+                        print(l_ind)
+                    
+                    num_stabilizers += 1
+                    indices.extend(l_ind)
+                    indptr.append(indptr[-1]+l_wt)
+                elif j == Ly-2:
+                    # down, left, right
+                    l_ind = [qind_ij+2, qind_ij2+3, qind_ij+3]
+                    l_wt = 3
+                    if verbose:
+                        print(l_ind)
+
+                    num_stabilizers += 1
+                    indices.extend(l_ind)
+                    indptr.append(indptr[-1]+l_wt)
+                # down, left, up, right
+                l_ind = [qind_ij, qind_ij2+1, qind_ij+2, qind_ij+1]
+                l_wt = 4
+            else:
+                # One rough and one smooth, both smooth
+                qind_i2 = int(np.sum(seen_qubits[:i-1]))
+                qind_ij2 = qind_i2 + 2*j + (1 if not boundary_y[i-1] else 0)
+
+                # down, left, up, right
+                l_ind = [qind_ij, qind_ij2+1, qind_ij+2, qind_ij+1]
+                l_wt = 4
+            
+            if verbose:
+                print(l_ind)
+
+            num_stabilizers += 1
+            indices.extend(l_ind)
+            indptr.append(indptr[-1]+l_wt)
+
+            if i == Lx-1 and not boundary_x[1]:
+                # Rough last column requires special treatment
+                assert boundary_y[i] == True
+                l_ind = [qind_ij+2*Ly-1-j, qind_ij+1, qind_ij+2*Ly-j]
+                l_wt = 3
+                if verbose:
+                        print(l_ind)
+                    
+                num_stabilizers += 1
+                indices.extend(l_ind)
+                indptr.append(indptr[-1]+l_wt)
+    
+    data = np.ones(len(indices), dtype=np.int8)
+    return csr_matrix((data, indices, indptr), shape=(num_stabilizers, num_qubits), dtype=np.int8)
+
+def surface_code(L, k, verbose=False):
+    """
+    Parity check for (unrotated) surface code with k logical qubits; both X and Z stabilizers
+    """
+    H_X = surface_code_x(L, k, verbose=verbose)
+    H_Z = surface_code_z(L, k, verbose=verbose)
+    H = block_array([[H_X, None], [None, H_Z]], format='csr', dtype=np.int8)
+    assert np.allclose((H @ symplectic(H_X.shape[1]) @ H.T).data % 2, 0)
+    return H
+
+def surface_code_logical_z(L, k, verbose=False):
+    """
+    Logical z operators; connect rough to rough through prime lattice
+    """
+    assert L > 3
+
+    Lx, Ly, boundary_x, boundary_y, seen_qubits, num_qubits = surface_code_properties(L, k, verbose)
+    
+    indices = []
+    indptr = [0]
+    num_stabilizers = 0
+
+    if verbose:
+        print('Generate Z logicals')
+
+    # When traversing top and bottom row, every we see a rough - smooth - rough switch, add a horizontal line operator
+    last_seen = False # last seen a rough
+    start = 0 # column with last seen rough
+    for i in range(Lx):
+        if boundary_y[i]:
+            # y boundary is smooth
+
+            if i == Lx-1:
+                # Last column; smooth above and rough right
+                assert not boundary_x[1]
+
+                # add horizontal operator ONLY on the bottom
+                l_ind = [int(np.sum(seen_qubits[:j])) for j in range(start, i+1)] + [int(np.sum(seen_qubits[:i]))+2*Ly-1]
+                if verbose:
+                    print(l_ind)
+                assert L == len(l_ind)
+                indices.extend(l_ind)
+                indptr.append(indptr[-1]+L)
+                num_stabilizers+= 1
+            
+            last_seen = True
+        else:
+            # y boundary is rough
+            if last_seen:
+                # Previously saw smooth; we are at a smooth-rough switch
+                # Add logical operator between start+1 and i-1 through both top and bottom X stabilziers
+                l_ind = [int(np.sum(seen_qubits[:j]))-1 for j in range(start+1, i+1)] + [int(np.sum(seen_qubits[:i+1]))-2, int(np.sum(seen_qubits[:i+1]))-1]
+                if verbose:
+                    print(l_ind)
+                assert L == len(l_ind)
+                indices.extend(l_ind)
+                indptr.append(indptr[-1]+L)
+                num_stabilizers+= 1
+                
+                l_ind = [int(np.sum(seen_qubits[:j])) for j in range(start, i)] + [int(np.sum(seen_qubits[:i]))+1, int(np.sum(seen_qubits[:i]))]
+                if verbose:
+                    print(l_ind)
+                assert L == len(l_ind)
+                indices.extend(l_ind)
+                indptr.append(indptr[-1]+L)
+                num_stabilizers+= 1
+                
+            start = i
+            last_seen=False
+            
+    assert num_stabilizers == k
+
+    data = np.ones(len(indices), dtype=np.int8)
+    return csr_matrix((data, indices, indptr), shape=(k, num_qubits), dtype=np.int8)
+
+def surface_code_logical_x(L, k, verbose=False):
+    """
+    Logical x operators; connect smooth to smooth through dual lattice
+    """
+    assert L > 3
+
+    Lx, Ly, boundary_x, boundary_y, seen_qubits, num_qubits = surface_code_properties(L, k, verbose)
+    
+    indices = []
+    indptr = [0]
+    num_stabilizers = 0
+
+    if verbose:
+        print('Generate X logicals')
+
+    # If right most column has smooth BCs on top and bottom, put vertical line operator
+    if boundary_y[Lx-1]:
+        # Right boundary needs to be right
+        assert not boundary_x[1]
+        # Get index or bottom right qubit
+        qi = int(np.sum(seen_qubits[:Lx-1]))+2*Ly-1
+        l_ind = [qi + j for j in range(Ly)] # Ly == L
+        if verbose:
+            print(l_ind)
+        indices.extend(l_ind)
+        indptr.append(indptr[-1]+Ly)
+        num_stabilizers+= 1
+        
+    # When traversing top and bottom row, every we see a smooth - rough - smooth switch, add a horizontal line operator
+    last_seen = True # last seen a smooth
+    for i in range(Lx):
+        if boundary_y[i]:
+            # y boundary is smooth
+            if not last_seen:
+                # Previously saw rough; we are at a rough-smooth switch
+                # Add logical operator between start+1 and i-1 through both top and bottom partial Z stabilziers
+                l_ind = [int(np.sum(seen_qubits[:j]))-1 for j in range(start+2, i+1)]
+                if verbose:
+                    print(l_ind)
+                assert L == len(l_ind)
+                indices.extend(l_ind)
+                indptr.append(indptr[-1]+L)
+                num_stabilizers+= 1
+                
+                l_ind = [int(np.sum(seen_qubits[:j])) for j in range(start+1, i)]
+                if verbose:
+                    print(l_ind)
+                assert L == len(l_ind)
+                indices.extend(l_ind)
+                indptr.append(indptr[-1]+L)
+                num_stabilizers+= 1
+                
+            start = i
+            last_seen=True
+        else:
+            # y boundary is rough
+
+            if i == Lx-1:
+                # Last column; we are now on rough, so we need to add horizontal operators
+                l_ind = [int(np.sum(seen_qubits[:j]))-1 for j in range(start+2, i+2)]
+                if verbose:
+                    print(l_ind)
+                assert L == len(l_ind)
+                indices.extend(l_ind)
+                indptr.append(indptr[-1]+L)
+                num_stabilizers+= 1
+                
+                l_ind = [int(np.sum(seen_qubits[:j])) for j in range(start+1, i+1)]
+                if verbose:
+                    print(l_ind)
+                assert L == len(l_ind)
+                indices.extend(l_ind)
+                indptr.append(indptr[-1]+L)
+                num_stabilizers+= 1
+                
+            last_seen=False
+        
+    assert num_stabilizers == k
+
+    data = np.ones(len(indices), dtype=np.int8)
+    return csr_matrix((data, indices, indptr), shape=(k, num_qubits), dtype=np.int8)
+
+def surface_code_logical(L, k, verbose=False):
+    """
+    All 2^(2*k) logical operators for (unrotated) surface code with k logical qubits
+    """
+    L_X = surface_code_logical_x(L, k, verbose=verbose)
+    L_Z = surface_code_logical_z(L, k, verbose=verbose)
+    Log = block_array([[L_X, None], [None, L_Z]], format='csr', dtype=np.int8)
+
+    nq = L_X.shape[1]
+    ip = Log @ symplectic(nq) @ Log.T
+    assert (ip[k:2*k,0:k] != ip[0:k,k:2*k].T).nnz == 0 
+    #assert np.all(ip.indptr == np.arange(2*k + 1))
+    #assert np.all(ip.indices == np.arange(2*k)[::-1])
+    
+    return Log, ip
