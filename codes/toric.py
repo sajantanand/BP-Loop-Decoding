@@ -1,5 +1,7 @@
 import numpy as np
-from scipy.sparse import csr_matrix, hstack, vstack, eye_array, block_array
+from scipy.sparse import eye_array, block_array
+from scipy.sparse import csr_matrix as csr_matrix
+# Ideally we would use newer csr_array, but ldpc doesn't support this.
 
 from copy import deepcopy
 
@@ -34,7 +36,7 @@ Toric code of distance d:
 
 """
 We construct a csr (compressed sparse row) with 
-`csr_array((data, indices, indptr), shape=(M, N), dtype=np.int8).toarray()`
+`csr_array((data, indices, indptr), shape=(M, N), dtype=np.uint8).toarray()`
     indices - list of all column indices for each row, concatenated
     indptr[i] - where the column indices for row i starts; this is one to the right of
         where the indices for row i-1 end
@@ -42,8 +44,8 @@ We construct a csr (compressed sparse row) with
 """
 
 def symplectic(nq):
-    I = eye_array(m=nq, dtype=np.int8, format='csr')
-    return block_array([[None, I], [I, None]], format='csr', dtype=np.int8)
+    I = eye_array(m=nq, dtype=np.uint8, format='csr')
+    return block_array([[None, I], [I, None]], format='csr', dtype=np.uint8)
 
 def toric_code_x(L, verbose=False):
     """
@@ -80,8 +82,8 @@ def toric_code_x(L, verbose=False):
         indices.extend(l_ind)
         indptr.append(indptr[-1]+4)
     
-    data = np.ones(len(indices), dtype=np.int8)
-    return csr_matrix((data, indices, indptr), shape=(L**2, 2*L**2), dtype=np.int8)
+    data = np.ones(len(indices), dtype=np.uint8)
+    return csr_matrix((data, indices, indptr), shape=(L**2, 2*L**2), dtype=np.uint8)
 
 def toric_code_z(L, verbose=False):
     """
@@ -118,8 +120,8 @@ def toric_code_z(L, verbose=False):
         indices.extend(l_ind)
         indptr.append(indptr[-1]+4)
     
-    data = np.ones(len(indices), dtype=np.int8)
-    return csr_matrix((data, indices, indptr), shape=(L**2, 2*L**2), dtype=np.int8)
+    data = np.ones(len(indices), dtype=np.uint8)
+    return csr_matrix((data, indices, indptr), shape=(L**2, 2*L**2), dtype=np.uint8)
     
 def toric_code(L, verbose=False):
     """
@@ -127,7 +129,9 @@ def toric_code(L, verbose=False):
     """
     H_X = toric_code_x(L, verbose=verbose)
     H_Z = toric_code_z(L, verbose=verbose)
-    H = block_array([[H_X, None], [None, H_Z]], format='csr', dtype=np.int8)
+    H = block_array([[H_X, None], [None, H_Z]], format='csr', dtype=np.uint8)
+    # ldpc doesn't work with sparse arrays, so convert this into a sparse matrix
+    H = csr_matrix(H)
     assert np.allclose((H @ symplectic(2*L**2) @ H.T).data % 2, 0)
     return H
 
@@ -156,9 +160,9 @@ def toric_code_logical_z(L, verbose=False):
     indices.extend(l_ind)
     indptr.append(indptr[-1]+L)
 
-    data = np.ones(len(indices), dtype=np.int8)
+    data = np.ones(len(indices), dtype=np.uint8)
     
-    return csr_matrix((data, indices, indptr), shape=(2, 2*L**2), dtype=np.int8)
+    return csr_matrix((data, indices, indptr), shape=(2, 2*L**2), dtype=np.uint8)
 
 def toric_code_logical_x(L, verbose=False):
     """
@@ -185,8 +189,8 @@ def toric_code_logical_x(L, verbose=False):
     indices.extend(l_ind)
     indptr.append(indptr[-1]+L)
 
-    data = np.ones(len(indices), dtype=np.int8)
-    return csr_matrix((data, indices, indptr), shape=(2, 2*L**2), dtype=np.int8)
+    data = np.ones(len(indices), dtype=np.uint8)
+    return csr_matrix((data, indices, indptr), shape=(2, 2*L**2), dtype=np.uint8)
 
 def toric_code_logical(L, verbose=False):
     """
@@ -194,10 +198,11 @@ def toric_code_logical(L, verbose=False):
     """
     L_X = toric_code_logical_x(L, verbose=verbose)
     L_Z = toric_code_logical_z(L, verbose=verbose)
-    Log = block_array([[L_X, None], [None, L_Z]], format='csr', dtype=np.int8)
+    Log = block_array([[L_X, None], [None, L_Z]], format='csr', dtype=np.uint8)
+    Log = csr_matrix(Log)
 
-    k = 2
-    ip = Log @ symplectic(2*2**2) @ Log.T
+    k=2
+    ip = Log @ symplectic(2*L**2) @ Log.T
     assert (ip[k:2*k,0:k] != ip[0:k,k:2*k].T).nnz == 0 
     assert np.all(ip.indptr == np.arange(2*k + 1))
     assert np.all(ip.indices == np.arange(2*k)[::-1])
@@ -438,8 +443,8 @@ def surface_code_x(L, k, verbose=False):
             indptr.append(indptr[-1]+l_wt)
 
     assert num_stabilizers == Lx*Ly
-    data = np.ones(len(indices), dtype=np.int8)
-    return csr_matrix((data, indices, indptr), shape=(Lx*Ly, num_qubits), dtype=np.int8)
+    data = np.ones(len(indices), dtype=np.uint8)
+    return csr_matrix((data, indices, indptr), shape=(Lx*Ly, num_qubits), dtype=np.uint8)
 
 def surface_code_z(L, k, verbose=False):
     """
@@ -524,8 +529,8 @@ def surface_code_z(L, k, verbose=False):
                 indices.extend(l_ind)
                 indptr.append(indptr[-1]+l_wt)
     
-    data = np.ones(len(indices), dtype=np.int8)
-    return csr_matrix((data, indices, indptr), shape=(num_stabilizers, num_qubits), dtype=np.int8)
+    data = np.ones(len(indices), dtype=np.uint8)
+    return csr_matrix((data, indices, indptr), shape=(num_stabilizers, num_qubits), dtype=np.uint8)
 
 def surface_code(L, k, verbose=False):
     """
@@ -533,7 +538,8 @@ def surface_code(L, k, verbose=False):
     """
     H_X = surface_code_x(L, k, verbose=verbose)
     H_Z = surface_code_z(L, k, verbose=verbose)
-    H = block_array([[H_X, None], [None, H_Z]], format='csr', dtype=np.int8)
+    H = block_array([[H_X, None], [None, H_Z]], format='csr', dtype=np.uint8)
+    H = csr_matrix(H)
     assert np.allclose((H @ symplectic(H_X.shape[1]) @ H.T).data % 2, 0)
     return H
 
@@ -599,8 +605,8 @@ def surface_code_logical_z(L, k, verbose=False):
             
     assert num_stabilizers == k
 
-    data = np.ones(len(indices), dtype=np.int8)
-    return csr_matrix((data, indices, indptr), shape=(k, num_qubits), dtype=np.int8)
+    data = np.ones(len(indices), dtype=np.uint8)
+    return csr_matrix((data, indices, indptr), shape=(k, num_qubits), dtype=np.uint8)
 
 def surface_code_logical_x(L, k, verbose=False):
     """
@@ -681,8 +687,8 @@ def surface_code_logical_x(L, k, verbose=False):
         
     assert num_stabilizers == k
 
-    data = np.ones(len(indices), dtype=np.int8)
-    return csr_matrix((data, indices, indptr), shape=(k, num_qubits), dtype=np.int8)
+    data = np.ones(len(indices), dtype=np.uint8)
+    return csr_matrix((data, indices, indptr), shape=(k, num_qubits), dtype=np.uint8)
 
 def surface_code_logical(L, k, verbose=False):
     """
@@ -690,8 +696,9 @@ def surface_code_logical(L, k, verbose=False):
     """
     L_X = surface_code_logical_x(L, k, verbose=verbose)
     L_Z = surface_code_logical_z(L, k, verbose=verbose)
-    Log = block_array([[L_X, None], [None, L_Z]], format='csr', dtype=np.int8)
-
+    Log = block_array([[L_X, None], [None, L_Z]], format='csr', dtype=np.uint8)
+    Log = csr_matrix(Log)
+    
     nq = L_X.shape[1]
     ip = Log @ symplectic(nq) @ Log.T
     assert (ip[k:2*k,0:k] != ip[0:k,k:2*k].T).nnz == 0 
